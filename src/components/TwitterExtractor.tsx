@@ -8,7 +8,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { Twitter, Download, Link, User } from 'lucide-react';
+import { Twitter, Download, Link, User, AlertCircle } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const TwitterExtractor = ({ onDataExtracted, onLog }) => {
   const [urlsText, setUrlsText] = useState('');
@@ -40,6 +41,55 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
     return null;
   };
 
+  const makeApiRequest = async (url, apiKey) => {
+    console.log('Выполняю запрос к:', url);
+    
+    try {
+      // Попытка прямого запроса
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 
+          'X-API-Key': apiKey,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        mode: 'cors'
+      });
+      
+      console.log('Статус ответа:', response.status);
+      console.log('Headers ответа:', Object.fromEntries(response.headers.entries()));
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log('Текст ошибки:', errorText);
+        
+        let errorMessage = `HTTP ${response.status}`;
+        
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorMessage = errorJson.message || errorJson.error || errorMessage;
+        } catch (e) {
+          errorMessage = errorText || errorMessage;
+        }
+        
+        throw new Error(errorMessage);
+      }
+      
+      const data = await response.json();
+      console.log('Данные получены:', data);
+      return data;
+      
+    } catch (error) {
+      console.error('Ошибка запроса:', error);
+      
+      if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+        throw new Error('CORS ошибка: API недоступен из браузера. Возможные причины:\n1. API блокирует запросы из браузера\n2. Неверный API ключ\n3. Превышен лимит запросов');
+      }
+      
+      throw error;
+    }
+  };
+
   const extractData = async () => {
     const apiKey = localStorage.getItem('twitterApiKey');
     if (!apiKey) {
@@ -64,6 +114,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
 
     setIsLoading(true);
     onLog(`Начало извлечения данных. Тип: ${extractionType}, URLs: ${urls.length}`, 'info');
+    onLog(`Используемый API ключ: ${apiKey.substring(0, 8)}...`, 'info');
     
     try {
       const results = [];
@@ -86,131 +137,99 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
           if (extractionType === 'tweets' && parsed.type === 'tweet') {
             // Извлечение отдельного твита
             console.log('Запрос твита с ID:', parsed.id);
-            const response = await fetch(`https://api.twitterapi.io/twitter/tweet/lookup?tweetId=${parsed.id}`, {
-              headers: { 
-                'X-API-Key': apiKey,
-                'Content-Type': 'application/json'
+            
+            const apiUrl = `https://api.twitterapi.io/twitter/tweet/lookup?tweetId=${parsed.id}`;
+            onLog(`Запрос к API: ${apiUrl}`, 'info');
+            
+            const tweetData = await makeApiRequest(apiUrl, apiKey);
+            
+            // Получаем информацию о профиле автора если есть username
+            let authorInfo = null;
+            const authorUsername = tweetData.author?.username || tweetData.user?.screen_name;
+            
+            if (authorUsername) {
+              try {
+                const userApiUrl = `https://api.twitterapi.io/twitter/user/info?userName=${authorUsername}`;
+                onLog(`Запрос информации об авторе: ${userApiUrl}`, 'info');
+                authorInfo = await makeApiRequest(userApiUrl, apiKey);
+                console.log('Информация об авторе получена:', authorInfo);
+              } catch (error) {
+                console.log('Ошибка получения информации об авторе:', error);
+                onLog(`Не удалось получить информацию об авторе: ${error.message}`, 'warning');
               }
+            }
+
+            results.push({
+              type: 'single_tweet',
+              originalUrl: trimmedUrl,
+              tweetUrl: `https://twitter.com/${authorUsername}/status/${parsed.id}`,
+              tweetData: {
+                id: parsed.id,
+                text: tweetData.text || tweetData.full_text || 'Текст недоступен',
+                created_at: tweetData.created_at,
+                like_count: tweetData.favorite_count || tweetData.like_count || 0,
+                retweet_count: tweetData.retweet_count || 0,
+                reply_count: tweetData.reply_count || 0,
+                view_count: tweetData.view_count || 0
+              },
+              authorProfile: authorInfo
             });
             
-            console.log('Ответ API для твита:', response.status);
-            
-            if (response.ok) {
-              const tweetData = await response.json();
-              console.log('Данные твита:', tweetData);
-              
-              // Получаем информацию о профиле автора если есть username
-              let authorInfo = null;
-              const authorUsername = tweetData.author?.username || tweetData.user?.screen_name;
-              
-              if (authorUsername) {
-                try {
-                  const userResponse = await fetch(`https://api.twitterapi.io/twitter/user/info?userName=${authorUsername}`, {
-                    headers: { 
-                      'X-API-Key': apiKey,
-                      'Content-Type': 'application/json'
-                    }
-                  });
-                  if (userResponse.ok) {
-                    authorInfo = await userResponse.json();
-                    console.log('Информация об авторе:', authorInfo);
-                  }
-                } catch (error) {
-                  console.log('Ошибка получения информации об авторе:', error);
-                }
-              }
-
-              results.push({
-                type: 'single_tweet',
-                originalUrl: trimmedUrl,
-                tweetUrl: `https://twitter.com/${authorUsername}/status/${parsed.id}`,
-                tweetData: {
-                  id: parsed.id,
-                  text: tweetData.text || tweetData.full_text || 'Текст недоступен',
-                  created_at: tweetData.created_at,
-                  like_count: tweetData.favorite_count || tweetData.like_count || 0,
-                  retweet_count: tweetData.retweet_count || 0,
-                  reply_count: tweetData.reply_count || 0,
-                  view_count: tweetData.view_count || 0
-                },
-                authorProfile: authorInfo
-              });
-              
-              onLog(`Успешно извлечен твит ${parsed.id}`, 'success');
-            } else {
-              const errorText = await response.text();
-              onLog(`Ошибка получения твита ${parsed.id}: ${response.status} - ${errorText}`, 'error');
-            }
+            onLog(`Успешно извлечен твит ${parsed.id}`, 'success');
 
           } else if (extractionType === 'accounts' && parsed.type === 'user') {
             // Получение информации о пользователе
             console.log('Запрос пользователя:', parsed.username);
             
-            const userResponse = await fetch(`https://api.twitterapi.io/twitter/user/info?userName=${parsed.username}`, {
-              headers: { 
-                'X-API-Key': apiKey,
-                'Content-Type': 'application/json'
-              }
-            });
+            const userApiUrl = `https://api.twitterapi.io/twitter/user/info?userName=${parsed.username}`;
+            onLog(`Запрос к API: ${userApiUrl}`, 'info');
+            
+            const userData = await makeApiRequest(userApiUrl, apiKey);
 
-            console.log('Ответ API для пользователя:', userResponse.status);
+            // Получение последних твитов
+            const tweetsApiUrl = `https://api.twitterapi.io/twitter/user/last_tweets?userName=${parsed.username}`;
+            onLog(`Запрос твитов пользователя: ${tweetsApiUrl}`, 'info');
 
-            if (userResponse.ok) {
-              const userData = await userResponse.json();
-              console.log('Данные пользователя:', userData);
-
-              // Получение последних твитов
-              const tweetsResponse = await fetch(`https://api.twitterapi.io/twitter/user/last_tweets?userName=${parsed.username}`, {
-                headers: { 
-                  'X-API-Key': apiKey,
-                  'Content-Type': 'application/json'
-                }
-              });
-
-              console.log('Ответ API для твитов пользователя:', tweetsResponse.status);
-
-              let tweetsData = { tweets: [] };
-              if (tweetsResponse.ok) {
-                tweetsData = await tweetsResponse.json();
-                console.log('Твиты пользователя:', tweetsData);
-              }
-              
-              // Ограничиваем количество твитов и добавляем ссылки
-              const tweets = (tweetsData.tweets || []).slice(0, tweetCount).map((tweet, index) => ({
-                id: tweet.id || `tweet_${index}`,
-                text: tweet.text || tweet.full_text || 'Текст недоступен',
-                created_at: tweet.created_at,
-                like_count: tweet.favorite_count || tweet.like_count || 0,
-                retweet_count: tweet.retweet_count || 0,
-                reply_count: tweet.reply_count || 0,
-                view_count: tweet.view_count || 0,
-                tweetUrl: tweet.id ? `https://twitter.com/${parsed.username}/status/${tweet.id}` : null
-              }));
-
-              results.push({
-                type: 'user_tweets',
-                originalUrl: trimmedUrl,
-                profileUrl: `https://twitter.com/${parsed.username}`,
-                userProfile: {
-                  username: userData.username || parsed.username,
-                  name: userData.name || userData.display_name || '',
-                  description: userData.description || userData.bio || '',
-                  followers_count: userData.followers_count || userData.followers || 0,
-                  following_count: userData.following_count || userData.following || 0,
-                  tweet_count: userData.statuses_count || userData.tweet_count || 0,
-                  verified: userData.verified || false,
-                  location: userData.location || '',
-                  profile_image_url: userData.profile_image_url || ''
-                },
-                tweets: tweets,
-                totalTweets: tweets.length
-              });
-              
-              onLog(`Успешно извлечено ${tweets.length} твитов от @${parsed.username}`, 'success');
-            } else {
-              const errorText = await userResponse.text();
-              onLog(`Ошибка получения данных пользователя ${parsed.username}: ${userResponse.status} - ${errorText}`, 'error');
+            let tweetsData = { tweets: [] };
+            try {
+              tweetsData = await makeApiRequest(tweetsApiUrl, apiKey);
+              console.log('Твиты пользователя получены:', tweetsData);
+            } catch (error) {
+              onLog(`Не удалось получить твиты пользователя: ${error.message}`, 'warning');
             }
+            
+            // Ограничиваем количество твитов и добавляем ссылки
+            const tweets = (tweetsData.tweets || []).slice(0, tweetCount).map((tweet, index) => ({
+              id: tweet.id || `tweet_${index}`,
+              text: tweet.text || tweet.full_text || 'Текст недоступен',
+              created_at: tweet.created_at,
+              like_count: tweet.favorite_count || tweet.like_count || 0,
+              retweet_count: tweet.retweet_count || 0,
+              reply_count: tweet.reply_count || 0,
+              view_count: tweet.view_count || 0,
+              tweetUrl: tweet.id ? `https://twitter.com/${parsed.username}/status/${tweet.id}` : null
+            }));
+
+            results.push({
+              type: 'user_tweets',
+              originalUrl: trimmedUrl,
+              profileUrl: `https://twitter.com/${parsed.username}`,
+              userProfile: {
+                username: userData.username || parsed.username,
+                name: userData.name || userData.display_name || '',
+                description: userData.description || userData.bio || '',
+                followers_count: userData.followers_count || userData.followers || 0,
+                following_count: userData.following_count || userData.following || 0,
+                tweet_count: userData.statuses_count || userData.tweet_count || 0,
+                verified: userData.verified || false,
+                location: userData.location || '',
+                profile_image_url: userData.profile_image_url || ''
+              },
+              tweets: tweets,
+              totalTweets: tweets.length
+            });
+            
+            onLog(`Успешно извлечено ${tweets.length} твитов от @${parsed.username}`, 'success');
           } else {
             onLog(`Несоответствие типа извлечения "${extractionType}" и типа URL "${parsed.type}": ${trimmedUrl}`, 'error');
           }
@@ -285,6 +304,15 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Предупреждение о CORS */}
+          <Alert>
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              <strong>Важно:</strong> Если возникают ошибки "Failed to fetch", это связано с CORS политикой браузера. 
+              Убедитесь, что ваш API ключ действителен и поддерживает запросы из браузера.
+            </AlertDescription>
+          </Alert>
+
           <div>
             <Label className="text-sm font-medium">Тип извлечения</Label>
             <Select value={extractionType} onValueChange={setExtractionType}>
