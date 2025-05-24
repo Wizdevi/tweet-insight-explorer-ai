@@ -12,21 +12,31 @@ import { Twitter, Download, Link, User } from 'lucide-react';
 
 const TwitterExtractor = ({ onDataExtracted, onLog }) => {
   const [urlsText, setUrlsText] = useState('');
-  const [extractionType, setExtractionType] = useState('tweets'); // 'tweets' or 'accounts'
+  const [extractionType, setExtractionType] = useState('tweets');
   const [tweetCount, setTweetCount] = useState(10);
   const [extractedData, setExtractedData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
   const parseTwitterUrl = (url) => {
-    const tweetMatch = url.match(/status\/(\d+)/);
-    const userMatch = url.match(/twitter\.com\/([^\/\?]+)/);
+    console.log('Парсинг URL:', url);
+    
+    // Удаляем параметры и якоря
+    const cleanUrl = url.split('?')[0].split('#')[0];
+    
+    // Поддерживаем разные форматы Twitter URL
+    const tweetMatch = cleanUrl.match(/(?:twitter\.com|x\.com)\/[^\/]+\/status\/(\d+)/);
+    const userMatch = cleanUrl.match(/(?:twitter\.com|x\.com)\/([^\/\?]+)(?:\/)?$/);
     
     if (tweetMatch) {
+      console.log('Найден твит ID:', tweetMatch[1]);
       return { type: 'tweet', id: tweetMatch[1] };
-    } else if (userMatch) {
+    } else if (userMatch && userMatch[1] !== 'status') {
+      console.log('Найден пользователь:', userMatch[1]);
       return { type: 'user', username: userMatch[1] };
     }
+    
+    console.log('URL не распознан');
     return null;
   };
 
@@ -38,6 +48,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
         description: "Необходимо указать Twitter API ключ в настройках",
         variant: "destructive"
       });
+      onLog('Отсутствует Twitter API ключ', 'error');
       return;
     }
 
@@ -52,82 +63,160 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
     }
 
     setIsLoading(true);
-    onLog('Начало извлечения данных Twitter', 'info');
+    onLog(`Начало извлечения данных. Тип: ${extractionType}, URLs: ${urls.length}`, 'info');
     
     try {
       const results = [];
 
       for (const url of urls) {
-        const parsed = parseTwitterUrl(url.trim());
+        const trimmedUrl = url.trim();
+        if (!trimmedUrl) continue;
+
+        console.log('Обработка URL:', trimmedUrl);
+        const parsed = parseTwitterUrl(trimmedUrl);
+        
         if (!parsed) {
-          onLog(`Неверный формат URL: ${url}`, 'error');
+          onLog(`Неверный формат URL: ${trimmedUrl}`, 'error');
           continue;
         }
 
-        onLog(`Обработка: ${url}`, 'info');
+        onLog(`Обработка ${parsed.type}: ${trimmedUrl}`, 'info');
 
-        if (extractionType === 'tweets' && parsed.type === 'tweet') {
-          // Извлечение отдельного твита
-          const response = await fetch(`https://api.twitterapi.io/twitter/tweet/lookup?tweetId=${parsed.id}`, {
-            headers: { 'X-API-Key': apiKey }
-          });
-          
-          if (response.ok) {
-            const tweetData = await response.json();
-            
-            // Получаем информацию о профиле автора
-            let authorInfo = null;
-            if (tweetData.author?.username) {
-              const userResponse = await fetch(`https://api.twitterapi.io/twitter/user/info?userName=${tweetData.author.username}`, {
-                headers: { 'X-API-Key': apiKey }
-              });
-              if (userResponse.ok) {
-                authorInfo = await userResponse.json();
+        try {
+          if (extractionType === 'tweets' && parsed.type === 'tweet') {
+            // Извлечение отдельного твита
+            console.log('Запрос твита с ID:', parsed.id);
+            const response = await fetch(`https://api.twitterapi.io/twitter/tweet/lookup?tweetId=${parsed.id}`, {
+              headers: { 
+                'X-API-Key': apiKey,
+                'Content-Type': 'application/json'
               }
+            });
+            
+            console.log('Ответ API для твита:', response.status);
+            
+            if (response.ok) {
+              const tweetData = await response.json();
+              console.log('Данные твита:', tweetData);
+              
+              // Получаем информацию о профиле автора если есть username
+              let authorInfo = null;
+              const authorUsername = tweetData.author?.username || tweetData.user?.screen_name;
+              
+              if (authorUsername) {
+                try {
+                  const userResponse = await fetch(`https://api.twitterapi.io/twitter/user/info?userName=${authorUsername}`, {
+                    headers: { 
+                      'X-API-Key': apiKey,
+                      'Content-Type': 'application/json'
+                    }
+                  });
+                  if (userResponse.ok) {
+                    authorInfo = await userResponse.json();
+                    console.log('Информация об авторе:', authorInfo);
+                  }
+                } catch (error) {
+                  console.log('Ошибка получения информации об авторе:', error);
+                }
+              }
+
+              results.push({
+                type: 'single_tweet',
+                originalUrl: trimmedUrl,
+                tweetUrl: `https://twitter.com/${authorUsername}/status/${parsed.id}`,
+                tweetData: {
+                  id: parsed.id,
+                  text: tweetData.text || tweetData.full_text || 'Текст недоступен',
+                  created_at: tweetData.created_at,
+                  like_count: tweetData.favorite_count || tweetData.like_count || 0,
+                  retweet_count: tweetData.retweet_count || 0,
+                  reply_count: tweetData.reply_count || 0,
+                  view_count: tweetData.view_count || 0
+                },
+                authorProfile: authorInfo
+              });
+              
+              onLog(`Успешно извлечен твит ${parsed.id}`, 'success');
+            } else {
+              const errorText = await response.text();
+              onLog(`Ошибка получения твита ${parsed.id}: ${response.status} - ${errorText}`, 'error');
             }
 
-            results.push({
-              type: 'single_tweet',
-              url: url,
-              tweetUrl: `https://twitter.com/${tweetData.author?.username}/status/${parsed.id}`,
-              data: tweetData,
-              authorProfile: authorInfo
-            });
-          } else {
-            onLog(`Ошибка получения твита ${parsed.id}: ${response.status}`, 'error');
-          }
-        } else if (extractionType === 'accounts' && parsed.type === 'user') {
-          // Получение информации о пользователе
-          const userResponse = await fetch(`https://api.twitterapi.io/twitter/user/info?userName=${parsed.username}`, {
-            headers: { 'X-API-Key': apiKey }
-          });
-
-          // Получение последних твитов
-          const tweetsResponse = await fetch(`https://api.twitterapi.io/twitter/user/last_tweets?userName=${parsed.username}`, {
-            headers: { 'X-API-Key': apiKey }
-          });
-
-          if (userResponse.ok && tweetsResponse.ok) {
-            const userData = await userResponse.json();
-            const tweetsData = await tweetsResponse.json();
+          } else if (extractionType === 'accounts' && parsed.type === 'user') {
+            // Получение информации о пользователе
+            console.log('Запрос пользователя:', parsed.username);
             
-            // Добавляем ссылки к каждому твиту
-            const tweetsWithUrls = (tweetsData.tweets || []).slice(0, tweetCount).map(tweet => ({
-              ...tweet,
-              tweetUrl: `https://twitter.com/${parsed.username}/status/${tweet.id || 'unknown'}`
-            }));
-
-            results.push({
-              type: 'user_tweets',
-              url: url,
-              userInfo: userData,
-              tweets: tweetsWithUrls
+            const userResponse = await fetch(`https://api.twitterapi.io/twitter/user/info?userName=${parsed.username}`, {
+              headers: { 
+                'X-API-Key': apiKey,
+                'Content-Type': 'application/json'
+              }
             });
+
+            console.log('Ответ API для пользователя:', userResponse.status);
+
+            if (userResponse.ok) {
+              const userData = await userResponse.json();
+              console.log('Данные пользователя:', userData);
+
+              // Получение последних твитов
+              const tweetsResponse = await fetch(`https://api.twitterapi.io/twitter/user/last_tweets?userName=${parsed.username}`, {
+                headers: { 
+                  'X-API-Key': apiKey,
+                  'Content-Type': 'application/json'
+                }
+              });
+
+              console.log('Ответ API для твитов пользователя:', tweetsResponse.status);
+
+              let tweetsData = { tweets: [] };
+              if (tweetsResponse.ok) {
+                tweetsData = await tweetsResponse.json();
+                console.log('Твиты пользователя:', tweetsData);
+              }
+              
+              // Ограничиваем количество твитов и добавляем ссылки
+              const tweets = (tweetsData.tweets || []).slice(0, tweetCount).map((tweet, index) => ({
+                id: tweet.id || `tweet_${index}`,
+                text: tweet.text || tweet.full_text || 'Текст недоступен',
+                created_at: tweet.created_at,
+                like_count: tweet.favorite_count || tweet.like_count || 0,
+                retweet_count: tweet.retweet_count || 0,
+                reply_count: tweet.reply_count || 0,
+                view_count: tweet.view_count || 0,
+                tweetUrl: tweet.id ? `https://twitter.com/${parsed.username}/status/${tweet.id}` : null
+              }));
+
+              results.push({
+                type: 'user_tweets',
+                originalUrl: trimmedUrl,
+                profileUrl: `https://twitter.com/${parsed.username}`,
+                userProfile: {
+                  username: userData.username || parsed.username,
+                  name: userData.name || userData.display_name || '',
+                  description: userData.description || userData.bio || '',
+                  followers_count: userData.followers_count || userData.followers || 0,
+                  following_count: userData.following_count || userData.following || 0,
+                  tweet_count: userData.statuses_count || userData.tweet_count || 0,
+                  verified: userData.verified || false,
+                  location: userData.location || '',
+                  profile_image_url: userData.profile_image_url || ''
+                },
+                tweets: tweets,
+                totalTweets: tweets.length
+              });
+              
+              onLog(`Успешно извлечено ${tweets.length} твитов от @${parsed.username}`, 'success');
+            } else {
+              const errorText = await userResponse.text();
+              onLog(`Ошибка получения данных пользователя ${parsed.username}: ${userResponse.status} - ${errorText}`, 'error');
+            }
           } else {
-            onLog(`Ошибка получения данных пользователя ${parsed.username}`, 'error');
+            onLog(`Несоответствие типа извлечения "${extractionType}" и типа URL "${parsed.type}": ${trimmedUrl}`, 'error');
           }
-        } else {
-          onLog(`Несоответствие типа извлечения и URL: ${url}`, 'error');
+        } catch (error) {
+          console.error('Ошибка при обработке URL:', error);
+          onLog(`Ошибка при обработке ${trimmedUrl}: ${error.message}`, 'error');
         }
       }
 
@@ -138,20 +227,31 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
         results: results
       };
 
+      console.log('Финальные данные:', finalData);
       setExtractedData(finalData);
       onDataExtracted(finalData);
-      onLog(`Успешно извлечено данных: ${results.length} записей`, 'success');
       
-      toast({
-        title: "Успех",
-        description: `Извлечено ${results.length} записей`
-      });
+      if (results.length > 0) {
+        onLog(`Успешно завершено извлечение: ${results.length} записей`, 'success');
+        toast({
+          title: "Успех",
+          description: `Извлечено ${results.length} записей из ${urls.length} URL`
+        });
+      } else {
+        onLog('Не удалось извлечь ни одной записи', 'warning');
+        toast({
+          title: "Предупреждение",
+          description: "Не удалось извлечь данные из предоставленных URL",
+          variant: "destructive"
+        });
+      }
 
     } catch (error) {
-      onLog(`Ошибка извлечения: ${error.message}`, 'error');
+      console.error('Общая ошибка извлечения:', error);
+      onLog(`Критическая ошибка извлечения: ${error.message}`, 'error');
       toast({
         title: "Ошибка",
-        description: "Произошла ошибка при извлечении данных",
+        description: "Произошла критическая ошибка при извлечении данных",
         variant: "destructive"
       });
     } finally {
@@ -172,7 +272,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
     linkElement.setAttribute('download', exportFileDefaultName);
     linkElement.click();
 
-    onLog('JSON файл скачан', 'success');
+    onLog('JSON файл успешно скачан', 'success');
   };
 
   return (
@@ -216,8 +316,8 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
               value={urlsText}
               onChange={(e) => setUrlsText(e.target.value)}
               placeholder={extractionType === 'tweets' 
-                ? "Введите ссылки на твиты, каждая с новой строки:\nhttps://twitter.com/username/status/123456\nhttps://twitter.com/username/status/789012"
-                : "Введите ссылки на аккаунты, каждая с новой строки:\nhttps://twitter.com/username1\nhttps://twitter.com/username2"
+                ? "Введите ссылки на твиты, каждая с новой строки:\nhttps://twitter.com/username/status/123456\nhttps://x.com/username/status/789012"
+                : "Введите ссылки на аккаунты, каждая с новой строки:\nhttps://twitter.com/username1\nhttps://x.com/username2"
               }
               className="mt-1 min-h-[120px]"
             />
@@ -230,7 +330,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
                 id="tweetCount"
                 type="number"
                 value={tweetCount}
-                onChange={(e) => setTweetCount(parseInt(e.target.value) || 10)}
+                onChange={(e) => setTweetCount(Math.max(1, Math.min(100, parseInt(e.target.value) || 10)))}
                 min="1"
                 max="100"
                 className="mt-1"
@@ -266,7 +366,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
                   {extractedData.results.slice(0, 3).map((result, index) => (
                     <div key={index} className="flex items-center gap-2">
                       <Link className="w-4 h-4 text-blue-500" />
-                      <span className="text-sm">{result.url}</span>
+                      <span className="text-sm">{result.originalUrl}</span>
                       <Badge variant="outline">
                         {result.type === 'single_tweet' ? 'Твит' : 'Профиль'}
                       </Badge>
