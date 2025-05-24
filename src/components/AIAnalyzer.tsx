@@ -82,18 +82,29 @@ const AIAnalyzer = ({ extractedData, onLog }) => {
     extractedData.results.forEach((result, index) => {
       if (result.type === 'single_tweet') {
         dataText += `\nТвит ${index + 1}:\n`;
+        dataText += `URL: ${result.tweetUrl}\n`;
         dataText += `Текст: ${result.data.text}\n`;
         dataText += `Автор: ${result.data.author?.username || 'Неизвестно'}\n`;
         dataText += `Лайки: ${result.data.likeCount || 0}\n`;
         dataText += `Ретвиты: ${result.data.retweetCount || 0}\n`;
         dataText += `Дата: ${result.data.created_at}\n`;
+        
+        if (result.authorProfile) {
+          dataText += `Профиль автора:\n`;
+          dataText += `  Описание: ${result.authorProfile.description || 'Нет описания'}\n`;
+          dataText += `  Подписчики: ${result.authorProfile.followers || 0}\n`;
+          dataText += `  Местоположение: ${result.authorProfile.location || 'Не указано'}\n`;
+        }
       } else if (result.type === 'user_tweets') {
         dataText += `\nПрофиль: ${result.userInfo?.username || 'Неизвестно'}\n`;
+        dataText += `URL профиля: ${result.url}\n`;
         dataText += `Описание: ${result.userInfo?.description || 'Нет описания'}\n`;
-        dataText += `Подписчики: ${result.userInfo?.followers || 0}\n\n`;
+        dataText += `Подписчики: ${result.userInfo?.followers || 0}\n`;
+        dataText += `Местоположение: ${result.userInfo?.location || 'Не указано'}\n\n`;
         dataText += `Твиты пользователя:\n`;
         result.tweets.forEach((tweet, tweetIndex) => {
-          dataText += `${tweetIndex + 1}. ${tweet.text}\n`;
+          dataText += `${tweetIndex + 1}. URL: ${tweet.tweetUrl}\n`;
+          dataText += `   Текст: ${tweet.text}\n`;
           dataText += `   Просмотры: ${tweet.viewCount || 0}\n`;
           dataText += `   Дата: ${tweet.created_at}\n\n`;
         });
@@ -239,6 +250,7 @@ const AIAnalyzer = ({ extractedData, onLog }) => {
                       variant="outline"
                       size="sm"
                       onClick={() => loadPrompt(prompt)}
+                      className="bg-indigo-100 hover:bg-indigo-200 border-indigo-300"
                     >
                       {prompt.name}
                     </Button>
@@ -261,6 +273,7 @@ const AIAnalyzer = ({ extractedData, onLog }) => {
                     size="sm"
                     onClick={savePrompt}
                     disabled={!currentPrompt.trim()}
+                    className="bg-green-600 hover:bg-green-700 text-white border-green-600"
                   >
                     <Save className="w-4 h-4 mr-2" />
                     Сохранить промпт
@@ -271,7 +284,7 @@ const AIAnalyzer = ({ extractedData, onLog }) => {
               <Button 
                 onClick={analyzeWithAI} 
                 disabled={isAnalyzing || !currentPrompt.trim()}
-                className="w-full"
+                className="w-full bg-purple-600 hover:bg-purple-700 text-white"
               >
                 <Play className="w-4 h-4 mr-2" />
                 {isAnalyzing ? 'Анализирую...' : 'Запустить анализ'}

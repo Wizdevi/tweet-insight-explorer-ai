@@ -96,6 +96,7 @@ const LoggingPanel = ({ logs }) => {
               size="sm" 
               onClick={downloadLogs}
               disabled={logs.length === 0}
+              className="bg-blue-600 hover:bg-blue-700 text-white border-blue-600"
             >
               <Download className="w-4 h-4 mr-2" />
               Скачать логи
@@ -116,7 +117,7 @@ const LoggingPanel = ({ logs }) => {
                     {getLogIcon(log.type)}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <Badge variant={getLogBadgeVariant(log.type)} size="sm">
+                        <Badge variant={getLogBadgeVariant(log.type)}>
                           {log.type}
                         </Badge>
                         <span className="text-xs text-gray-500">
