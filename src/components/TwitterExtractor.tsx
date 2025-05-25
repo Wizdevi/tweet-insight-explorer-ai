@@ -190,7 +190,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
       }
 
       // Формируем данные для Apify Actor согласно документации
-      const inputData = {
+      const inputData: any = {
         tweetsDesired: tweetCount,
         withReplies: withReplies,
         includeUserInfo: true
