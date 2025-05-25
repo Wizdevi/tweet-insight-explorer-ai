@@ -8,21 +8,22 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { Twitter, Download, Link, User, AlertCircle } from 'lucide-react';
+import { Twitter, Download, Link, User, AlertCircle, Clock } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const TwitterExtractor = ({ onDataExtracted, onLog }) => {
   const [urlsText, setUrlsText] = useState('');
   const [extractionType, setExtractionType] = useState('tweets');
   const [tweetCount, setTweetCount] = useState(10);
+  const [withReplies, setWithReplies] = useState(false);
   const [extractedData, setExtractedData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [runId, setRunId] = useState(null);
   const { toast } = useToast();
 
   const parseTwitterUrl = (url) => {
     console.log('Парсинг URL:', url);
     
-    // Удаляем параметры и якоря
     const cleanUrl = url.split('?')[0].split('#')[0];
     
     // Поддерживаем разные форматы Twitter URL
@@ -31,74 +32,105 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
     
     if (tweetMatch) {
       console.log('Найден твит ID:', tweetMatch[1]);
-      return { type: 'tweet', id: tweetMatch[1] };
+      return { type: 'tweet', id: tweetMatch[1], url: cleanUrl };
     } else if (userMatch && userMatch[1] !== 'status') {
       console.log('Найден пользователь:', userMatch[1]);
-      return { type: 'user', username: userMatch[1] };
+      return { type: 'user', username: userMatch[1], url: cleanUrl };
     }
     
     console.log('URL не распознан');
     return null;
   };
 
-  const makeApiRequest = async (url, apiKey) => {
-    console.log('Выполняю запрос к:', url);
+  const startApifyActor = async (inputData, apiToken) => {
+    console.log('Запуск Apify Actor с данными:', inputData);
     
-    try {
-      // Попытка прямого запроса
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 
-          'X-API-Key': apiKey,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        mode: 'cors'
-      });
-      
-      console.log('Статус ответа:', response.status);
-      console.log('Headers ответа:', Object.fromEntries(response.headers.entries()));
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.log('Текст ошибки:', errorText);
-        
-        let errorMessage = `HTTP ${response.status}`;
-        
-        try {
-          const errorJson = JSON.parse(errorText);
-          errorMessage = errorJson.message || errorJson.error || errorMessage;
-        } catch (e) {
-          errorMessage = errorText || errorMessage;
-        }
-        
-        throw new Error(errorMessage);
-      }
-      
-      const data = await response.json();
-      console.log('Данные получены:', data);
-      return data;
-      
-    } catch (error) {
-      console.error('Ошибка запроса:', error);
-      
-      if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
-        throw new Error('CORS ошибка: API недоступен из браузера. Возможные причины:\n1. API блокирует запросы из браузера\n2. Неверный API ключ\n3. Превышен лимит запросов');
-      }
-      
-      throw error;
+    const response = await fetch('https://api.apify.com/v2/acts/web.harvester~twitter-scraper/runs', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiToken}`
+      },
+      body: JSON.stringify(inputData)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.log('Ошибка запуска Actor:', errorText);
+      throw new Error(`Ошибка запуска Actor: ${response.status} ${errorText}`);
     }
+
+    const result = await response.json();
+    console.log('Actor запущен:', result);
+    return result.data.id;
+  };
+
+  const checkRunStatus = async (runId, apiToken) => {
+    const response = await fetch(`https://api.apify.com/v2/actor-runs/${runId}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ошибка получения статуса: ${response.status}`);
+    }
+
+    const result = await response.json();
+    return result.data;
+  };
+
+  const getRunResults = async (runId, apiToken) => {
+    const response = await fetch(`https://api.apify.com/v2/actor-runs/${runId}/dataset/items`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ошибка получения результатов: ${response.status}`);
+    }
+
+    const results = await response.json();
+    return results;
+  };
+
+  const waitForCompletion = async (runId, apiToken, maxWaitTime = 300000) => {
+    const startTime = Date.now();
+    const checkInterval = 5000; // 5 секунд
+    
+    while (Date.now() - startTime < maxWaitTime) {
+      const runInfo = await checkRunStatus(runId, apiToken);
+      console.log('Статус выполнения:', runInfo.status);
+      
+      onLog(`Статус выполнения: ${runInfo.status}`, 'info');
+      
+      if (runInfo.status === 'SUCCEEDED') {
+        return await getRunResults(runId, apiToken);
+      } else if (runInfo.status === 'FAILED') {
+        throw new Error('Выполнение Actor завершилось с ошибкой');
+      } else if (runInfo.status === 'ABORTED') {
+        throw new Error('Выполнение Actor было прервано');
+      }
+      
+      // Ждем перед следующей проверкой
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+    }
+    
+    throw new Error('Превышено время ожидания выполнения');
   };
 
   const extractData = async () => {
-    const apiKey = localStorage.getItem('twitterApiKey');
-    if (!apiKey) {
+    const apiToken = localStorage.getItem('apifyApiToken');
+    if (!apiToken) {
       toast({
         title: "Ошибка",
-        description: "Необходимо указать Twitter API ключ в настройках",
+        description: "Необходимо указать Apify API токен в настройках",
         variant: "destructive"
       });
-      onLog('Отсутствует Twitter API ключ', 'error');
+      onLog('Отсутствует Apify API токен', 'error');
       return;
     }
 
@@ -114,16 +146,16 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
 
     setIsLoading(true);
     onLog(`Начало извлечения данных. Тип: ${extractionType}, URLs: ${urls.length}`, 'info');
-    onLog(`Используемый API ключ: ${apiKey.substring(0, 8)}...`, 'info');
     
     try {
-      const results = [];
+      const startUrls = [];
+      const handles = [];
 
+      // Обрабатываем URLs и разделяем на прямые ссылки и handles
       for (const url of urls) {
         const trimmedUrl = url.trim();
         if (!trimmedUrl) continue;
 
-        console.log('Обработка URL:', trimmedUrl);
         const parsed = parseTwitterUrl(trimmedUrl);
         
         if (!parsed) {
@@ -131,130 +163,181 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
           continue;
         }
 
-        onLog(`Обработка ${parsed.type}: ${trimmedUrl}`, 'info');
-
-        try {
-          if (extractionType === 'tweets' && parsed.type === 'tweet') {
-            // Извлечение отдельного твита
-            console.log('Запрос твита с ID:', parsed.id);
-            
-            const apiUrl = `https://api.twitterapi.io/twitter/tweet/lookup?tweetId=${parsed.id}`;
-            onLog(`Запрос к API: ${apiUrl}`, 'info');
-            
-            const tweetData = await makeApiRequest(apiUrl, apiKey);
-            
-            // Получаем информацию о профиле автора если есть username
-            let authorInfo = null;
-            const authorUsername = tweetData.author?.username || tweetData.user?.screen_name;
-            
-            if (authorUsername) {
-              try {
-                const userApiUrl = `https://api.twitterapi.io/twitter/user/info?userName=${authorUsername}`;
-                onLog(`Запрос информации об авторе: ${userApiUrl}`, 'info');
-                authorInfo = await makeApiRequest(userApiUrl, apiKey);
-                console.log('Информация об авторе получена:', authorInfo);
-              } catch (error) {
-                console.log('Ошибка получения информации об авторе:', error);
-                onLog(`Не удалось получить информацию об авторе: ${error.message}`, 'warning');
-              }
-            }
-
-            results.push({
-              type: 'single_tweet',
-              originalUrl: trimmedUrl,
-              tweetUrl: `https://twitter.com/${authorUsername}/status/${parsed.id}`,
-              tweetData: {
-                id: parsed.id,
-                text: tweetData.text || tweetData.full_text || 'Текст недоступен',
-                created_at: tweetData.created_at,
-                like_count: tweetData.favorite_count || tweetData.like_count || 0,
-                retweet_count: tweetData.retweet_count || 0,
-                reply_count: tweetData.reply_count || 0,
-                view_count: tweetData.view_count || 0
-              },
-              authorProfile: authorInfo
-            });
-            
-            onLog(`Успешно извлечен твит ${parsed.id}`, 'success');
-
-          } else if (extractionType === 'accounts' && parsed.type === 'user') {
-            // Получение информации о пользователе
-            console.log('Запрос пользователя:', parsed.username);
-            
-            const userApiUrl = `https://api.twitterapi.io/twitter/user/info?userName=${parsed.username}`;
-            onLog(`Запрос к API: ${userApiUrl}`, 'info');
-            
-            const userData = await makeApiRequest(userApiUrl, apiKey);
-
-            // Получение последних твитов
-            const tweetsApiUrl = `https://api.twitterapi.io/twitter/user/last_tweets?userName=${parsed.username}`;
-            onLog(`Запрос твитов пользователя: ${tweetsApiUrl}`, 'info');
-
-            let tweetsData = { tweets: [] };
-            try {
-              tweetsData = await makeApiRequest(tweetsApiUrl, apiKey);
-              console.log('Твиты пользователя получены:', tweetsData);
-            } catch (error) {
-              onLog(`Не удалось получить твиты пользователя: ${error.message}`, 'warning');
-            }
-            
-            // Ограничиваем количество твитов и добавляем ссылки
-            const tweets = (tweetsData.tweets || []).slice(0, tweetCount).map((tweet, index) => ({
-              id: tweet.id || `tweet_${index}`,
-              text: tweet.text || tweet.full_text || 'Текст недоступен',
-              created_at: tweet.created_at,
-              like_count: tweet.favorite_count || tweet.like_count || 0,
-              retweet_count: tweet.retweet_count || 0,
-              reply_count: tweet.reply_count || 0,
-              view_count: tweet.view_count || 0,
-              tweetUrl: tweet.id ? `https://twitter.com/${parsed.username}/status/${tweet.id}` : null
-            }));
-
-            results.push({
-              type: 'user_tweets',
-              originalUrl: trimmedUrl,
-              profileUrl: `https://twitter.com/${parsed.username}`,
-              userProfile: {
-                username: userData.username || parsed.username,
-                name: userData.name || userData.display_name || '',
-                description: userData.description || userData.bio || '',
-                followers_count: userData.followers_count || userData.followers || 0,
-                following_count: userData.following_count || userData.following || 0,
-                tweet_count: userData.statuses_count || userData.tweet_count || 0,
-                verified: userData.verified || false,
-                location: userData.location || '',
-                profile_image_url: userData.profile_image_url || ''
-              },
-              tweets: tweets,
-              totalTweets: tweets.length
-            });
-            
-            onLog(`Успешно извлечено ${tweets.length} твитов от @${parsed.username}`, 'success');
+        if (parsed.type === 'user') {
+          if (extractionType === 'accounts') {
+            startUrls.push(parsed.url);
+            handles.push(parsed.username);
           } else {
-            onLog(`Несоответствие типа извлечения "${extractionType}" и типа URL "${parsed.type}": ${trimmedUrl}`, 'error');
+            onLog(`URL аккаунта не подходит для извлечения твитов: ${trimmedUrl}`, 'warning');
           }
-        } catch (error) {
-          console.error('Ошибка при обработке URL:', error);
-          onLog(`Ошибка при обработке ${trimmedUrl}: ${error.message}`, 'error');
+        } else if (parsed.type === 'tweet') {
+          if (extractionType === 'tweets') {
+            startUrls.push(parsed.url);
+          } else {
+            onLog(`URL твита не подходит для извлечения аккаунтов: ${trimmedUrl}`, 'warning');
+          }
+        }
+      }
+
+      if (startUrls.length === 0) {
+        toast({
+          title: "Ошибка",
+          description: "Нет подходящих URL для обработки",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      // Формируем данные для Apify Actor
+      const inputData = {
+        startUrls: startUrls,
+        handles: handles,
+        tweetsDesired: extractionType === 'accounts' ? tweetCount : 1,
+        withReplies: withReplies,
+        includeUserInfo: true
+      };
+
+      onLog(`Подготовка запроса к Apify с параметрами: ${JSON.stringify(inputData, null, 2)}`, 'info');
+
+      // Запускаем Actor
+      const currentRunId = await startApifyActor(inputData, apiToken);
+      setRunId(currentRunId);
+      
+      onLog(`Actor запущен с ID: ${currentRunId}`, 'success');
+      toast({
+        title: "Запуск успешен",
+        description: `Actor запущен. ID выполнения: ${currentRunId}`,
+      });
+
+      // Ждем завершения и получаем результаты
+      onLog('Ожидание завершения извлечения данных...', 'info');
+      const results = await waitForCompletion(currentRunId, apiToken);
+      
+      console.log('Получены результаты:', results);
+
+      // Обрабатываем результаты
+      const processedResults = [];
+      
+      for (const item of results) {
+        if (extractionType === 'accounts') {
+          // Группируем по пользователям
+          const existingUser = processedResults.find(r => r.userProfile?.userId === item.user?.userId);
+          
+          if (existingUser) {
+            existingUser.tweets.push({
+              id: item.id,
+              text: item.text,
+              created_at: item.timestamp,
+              like_count: item.likes || 0,
+              retweet_count: item.retweets || 0,
+              reply_count: item.replies || 0,
+              quote_count: item.quotes || 0,
+              view_count: item.views || 0,
+              tweetUrl: item.url,
+              isPinned: item.isPinned || false,
+              isQuote: item.isQuote || false,
+              isRetweet: item.isRetweet || false,
+              isReply: item.isReply || false,
+              media: item.media || []
+            });
+          } else {
+            processedResults.push({
+              type: 'user_tweets',
+              originalUrl: item.user?.url || `https://x.com/${item.user?.username}`,
+              profileUrl: item.user?.url || `https://x.com/${item.user?.username}`,
+              userProfile: {
+                userId: item.user?.userId,
+                username: item.user?.username || item.username,
+                name: item.user?.userFullName || item.fullname,
+                description: item.user?.description || '',
+                followers_count: item.user?.totalFollowers || 0,
+                following_count: item.user?.totalFollowing || 0,
+                tweet_count: item.user?.totalTweets || 0,
+                verified: item.user?.verified || item.verified || false,
+                location: item.user?.location || '',
+                profile_image_url: item.user?.avatar || '',
+                website: item.user?.website || '',
+                joinDate: item.user?.joinDate || '',
+                totalLikes: item.user?.totalLikes || 0,
+                totalMediaCount: item.user?.totalMediaCount || 0
+              },
+              tweets: [{
+                id: item.id,
+                text: item.text,
+                created_at: item.timestamp,
+                like_count: item.likes || 0,
+                retweet_count: item.retweets || 0,
+                reply_count: item.replies || 0,
+                quote_count: item.quotes || 0,
+                view_count: item.views || 0,
+                tweetUrl: item.url,
+                isPinned: item.isPinned || false,
+                isQuote: item.isQuote || false,
+                isRetweet: item.isRetweet || false,
+                isReply: item.isReply || false,
+                media: item.media || []
+              }],
+              totalTweets: 1
+            });
+          }
+        } else {
+          // Отдельные твиты
+          processedResults.push({
+            type: 'single_tweet',
+            originalUrl: item.url,
+            tweetUrl: item.url,
+            tweetData: {
+              id: item.id,
+              text: item.text,
+              created_at: item.timestamp,
+              like_count: item.likes || 0,
+              retweet_count: item.retweets || 0,
+              reply_count: item.replies || 0,
+              quote_count: item.quotes || 0,
+              view_count: item.views || 0,
+              isPinned: item.isPinned || false,
+              isQuote: item.isQuote || false,
+              isRetweet: item.isRetweet || false,
+              isReply: item.isReply || false,
+              media: item.media || []
+            },
+            authorProfile: item.user ? {
+              userId: item.user.userId,
+              username: item.user.username || item.username,
+              name: item.user.userFullName || item.fullname,
+              description: item.user.description || '',
+              followers_count: item.user.totalFollowers || 0,
+              following_count: item.user.totalFollowing || 0,
+              tweet_count: item.user.totalTweets || 0,
+              verified: item.user.verified || item.verified || false,
+              location: item.user.location || '',
+              profile_image_url: item.user.avatar || '',
+              website: item.user.website || '',
+              joinDate: item.user.joinDate || '',
+              totalLikes: item.user.totalLikes || 0,
+              totalMediaCount: item.user.totalMediaCount || 0
+            } : null
+          });
         }
       }
 
       const finalData = {
         extractedAt: new Date().toISOString(),
         extractionType: extractionType,
-        totalResults: results.length,
-        results: results
+        totalResults: processedResults.length,
+        apifyRunId: currentRunId,
+        results: processedResults
       };
 
       console.log('Финальные данные:', finalData);
       setExtractedData(finalData);
       onDataExtracted(finalData);
       
-      if (results.length > 0) {
-        onLog(`Успешно завершено извлечение: ${results.length} записей`, 'success');
+      if (processedResults.length > 0) {
+        onLog(`Успешно завершено извлечение: ${processedResults.length} записей`, 'success');
         toast({
           title: "Успех",
-          description: `Извлечено ${results.length} записей из ${urls.length} URL`
+          description: `Извлечено ${processedResults.length} записей из ${urls.length} URL`
         });
       } else {
         onLog('Не удалось извлечь ни одной записи', 'warning');
@@ -266,15 +349,16 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
       }
 
     } catch (error) {
-      console.error('Общая ошибка извлечения:', error);
-      onLog(`Критическая ошибка извлечения: ${error.message}`, 'error');
+      console.error('Ошибка извлечения:', error);
+      onLog(`Ошибка извлечения: ${error.message}`, 'error');
       toast({
         title: "Ошибка",
-        description: "Произошла критическая ошибка при извлечении данных",
+        description: error.message,
         variant: "destructive"
       });
     } finally {
       setIsLoading(false);
+      setRunId(null);
     }
   };
 
@@ -300,16 +384,16 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Twitter className="w-5 h-5 text-blue-500" />
-            Извлечение Twitter данных
+            Извлечение Twitter данных (Apify)
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Предупреждение о CORS */}
           <Alert>
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              <strong>Важно:</strong> Если возникают ошибки "Failed to fetch", это связано с CORS политикой браузера. 
-              Убедитесь, что ваш API ключ действителен и поддерживает запросы из браузера.
+              <strong>Новый сервис:</strong> Теперь используется Apify Twitter Scraper. 
+              Убедитесь, что у вас есть действительный Apify API токен в настройках.
+              Процесс извлечения может занять несколько минут.
             </AlertDescription>
           </Alert>
 
@@ -352,18 +436,33 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
           </div>
 
           {extractionType === 'accounts' && (
-            <div>
-              <Label htmlFor="tweetCount">Количество твитов с каждого аккаунта</Label>
-              <Input
-                id="tweetCount"
-                type="number"
-                value={tweetCount}
-                onChange={(e) => setTweetCount(Math.max(1, Math.min(100, parseInt(e.target.value) || 10)))}
-                min="1"
-                max="100"
-                className="mt-1"
-              />
-            </div>
+            <>
+              <div>
+                <Label htmlFor="tweetCount">Количество твитов с каждого аккаунта</Label>
+                <Input
+                  id="tweetCount"
+                  type="number"
+                  value={tweetCount}
+                  onChange={(e) => setTweetCount(Math.max(1, Math.min(200, parseInt(e.target.value) || 10)))}
+                  min="1"
+                  max="200"
+                  className="mt-1"
+                />
+              </div>
+              
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="withReplies"
+                  checked={withReplies}
+                  onChange={(e) => setWithReplies(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                <Label htmlFor="withReplies" className="text-sm">
+                  Включать ответы в треды
+                </Label>
+              </div>
+            </>
           )}
 
           <Button 
@@ -371,7 +470,14 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
             disabled={isLoading || !urlsText.trim()}
             className="w-full bg-green-600 hover:bg-green-700 text-white"
           >
-            {isLoading ? 'Извлечение...' : 'Извлечь данные'}
+            {isLoading ? (
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 animate-spin" />
+                Извлечение... {runId && `(ID: ${runId.substring(0, 8)}...)`}
+              </div>
+            ) : (
+              'Извлечь данные'
+            )}
           </Button>
         </CardContent>
       </Card>
@@ -391,13 +497,24 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
               <div className="bg-gray-50 p-4 rounded-lg">
                 <p className="text-sm text-gray-600 mb-2">Предварительный просмотр:</p>
                 <div className="space-y-2">
+                  {extractedData.apifyRunId && (
+                    <div className="flex items-center gap-2 text-xs text-gray-500">
+                      <Clock className="w-3 h-3" />
+                      <span>Apify Run ID: {extractedData.apifyRunId}</span>
+                    </div>
+                  )}
                   {extractedData.results.slice(0, 3).map((result, index) => (
                     <div key={index} className="flex items-center gap-2">
                       <Link className="w-4 h-4 text-blue-500" />
-                      <span className="text-sm">{result.originalUrl}</span>
+                      <span className="text-sm">{result.originalUrl || result.profileUrl}</span>
                       <Badge variant="outline">
                         {result.type === 'single_tweet' ? 'Твит' : 'Профиль'}
                       </Badge>
+                      {result.tweets && (
+                        <Badge variant="outline" className="text-xs">
+                          {result.tweets.length} твитов
+                        </Badge>
+                      )}
                     </div>
                   ))}
                   {extractedData.results.length > 3 && (
