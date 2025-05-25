@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -14,7 +15,6 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
   const [urlsText, setUrlsText] = useState('');
   const [extractionType, setExtractionType] = useState('accounts');
   const [tweetCount, setTweetCount] = useState(10);
-  const [withReplies, setWithReplies] = useState(false);
   const [extractedData, setExtractedData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [runId, setRunId] = useState(null);
@@ -190,10 +190,13 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
 
       // Формируем данные для Apify Actor согласно документации
       const inputData: any = {
-        tweetsDesired: tweetCount,
-        withReplies: withReplies,
         includeUserInfo: true
       };
+
+      // Для аккаунтов устанавливаем количество твитов
+      if (extractionType === 'accounts') {
+        inputData.tweetsDesired = tweetCount;
+      }
 
       // Добавляем startUrls как объекты с полем url
       if (startUrls.length > 0) {
@@ -248,6 +251,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
               isReply: item.isReply || false,
               media: item.media || []
             });
+            existingUser.totalTweets++;
           } else {
             processedResults.push({
               type: 'user_tweets',
@@ -265,7 +269,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
                 location: item.user?.location || '',
                 profile_image_url: item.user?.avatar || '',
                 website: item.user?.website || '',
-                joinDate: item.user.joinDate || '',
+                joinDate: item.user?.joinDate || '',
                 totalLikes: item.user?.totalLikes || 0,
                 totalMediaCount: item.user?.totalMediaCount || 0
               },
@@ -334,6 +338,11 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
         extractionType: extractionType,
         totalResults: processedResults.length,
         apifyRunId: currentRunId,
+        metadata: {
+          requestedTweetCount: extractionType === 'accounts' ? tweetCount : null,
+          processedUrls: urls.length,
+          extractionParameters: inputData
+        },
         results: processedResults
       };
 
@@ -443,31 +452,20 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
             />
           </div>
 
-          <div>
-            <Label htmlFor="tweetCount">Количество твитов {extractionType === 'accounts' ? 'с каждого аккаунта' : 'для извлечения'}</Label>
-            <Input
-              id="tweetCount"
-              type="number"
-              value={tweetCount}
-              onChange={(e) => setTweetCount(Math.max(1, Math.min(200, parseInt(e.target.value) || 10)))}
-              min="1"
-              max="200"
-              className="mt-1"
-            />
-          </div>
-          
-          <div className="flex items-center space-x-2">
-            <input
-              type="checkbox"
-              id="withReplies"
-              checked={withReplies}
-              onChange={(e) => setWithReplies(e.target.checked)}
-              className="h-4 w-4"
-            />
-            <Label htmlFor="withReplies" className="text-sm">
-              Включать ответы в треды
-            </Label>
-          </div>
+          {extractionType === 'accounts' && (
+            <div>
+              <Label htmlFor="tweetCount">Количество твитов с каждого аккаунта</Label>
+              <Input
+                id="tweetCount"
+                type="number"
+                value={tweetCount}
+                onChange={(e) => setTweetCount(Math.max(1, Math.min(200, parseInt(e.target.value) || 10)))}
+                min="1"
+                max="200"
+                className="mt-1"
+              />
+            </div>
+          )}
 
           <Button 
             onClick={extractData} 
