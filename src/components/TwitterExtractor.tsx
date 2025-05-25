@@ -164,16 +164,15 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
 
         if (parsed.type === 'user') {
           if (extractionType === 'accounts') {
-            // Добавляем URL профиля напрямую для извлечения аккаунтов
-            startUrls.push(parsed.url);
+            // Добавляем handle для извлечения аккаунтов
             handles.push(parsed.username);
           } else {
             onLog(`URL аккаунта не подходит для извлечения твитов: ${trimmedUrl}`, 'warning');
           }
         } else if (parsed.type === 'tweet') {
           if (extractionType === 'tweets') {
-            // Для отдельных твитов добавляем URL твита
-            startUrls.push(parsed.url);
+            // Для отдельных твитов добавляем URL в правильном формате
+            startUrls.push({ url: parsed.url });
           } else {
             onLog(`URL твита не подходит для извлечения аккаунтов: ${trimmedUrl}`, 'warning');
           }
@@ -196,7 +195,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
         includeUserInfo: true
       };
 
-      // Добавляем startUrls как простые строки (не объекты)
+      // Добавляем startUrls как объекты с полем url
       if (startUrls.length > 0) {
         inputData.startUrls = startUrls;
       }
@@ -266,7 +265,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
                 location: item.user?.location || '',
                 profile_image_url: item.user?.avatar || '',
                 website: item.user?.website || '',
-                joinDate: item.user?.joinDate || '',
+                joinDate: item.user.joinDate || '',
                 totalLikes: item.user?.totalLikes || 0,
                 totalMediaCount: item.user?.totalMediaCount || 0
               },
