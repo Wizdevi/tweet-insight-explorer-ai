@@ -10,20 +10,24 @@ import { Settings, Save, Key, Shield } from 'lucide-react';
 const SettingsPanel = ({ onLog }) => {
   const [twitterApiKey, setTwitterApiKey] = useState('');
   const [openaiApiKey, setOpenaiApiKey] = useState('');
+  const [apifyApiToken, setApifyApiToken] = useState('');
   const { toast } = useToast();
 
   useEffect(() => {
     // Загрузка сохраненных настроек
     const savedTwitterKey = localStorage.getItem('twitterApiKey');
     const savedOpenaiKey = localStorage.getItem('openaiApiKey');
+    const savedApifyToken = localStorage.getItem('apifyApiToken');
     
     if (savedTwitterKey) setTwitterApiKey(savedTwitterKey);
     if (savedOpenaiKey) setOpenaiApiKey(savedOpenaiKey);
+    if (savedApifyToken) setApifyApiToken(savedApifyToken);
   }, []);
 
   const saveSettings = () => {
     localStorage.setItem('twitterApiKey', twitterApiKey);
     localStorage.setItem('openaiApiKey', openaiApiKey);
+    localStorage.setItem('apifyApiToken', apifyApiToken);
     
     toast({
       title: "Настройки сохранены",
@@ -36,8 +40,10 @@ const SettingsPanel = ({ onLog }) => {
   const clearSettings = () => {
     localStorage.removeItem('twitterApiKey');
     localStorage.removeItem('openaiApiKey');
+    localStorage.removeItem('apifyApiToken');
     setTwitterApiKey('');
     setOpenaiApiKey('');
+    setApifyApiToken('');
     
     toast({
       title: "Настройки очищены",
@@ -76,6 +82,32 @@ const SettingsPanel = ({ onLog }) => {
           </div>
 
           <div className="space-y-4">
+            <div>
+              <Label htmlFor="apifyApiToken" className="flex items-center gap-2">
+                <Key className="w-4 h-4" />
+                Apify API Token
+              </Label>
+              <Input
+                id="apifyApiToken"
+                type="password"
+                value={apifyApiToken}
+                onChange={(e) => setApifyApiToken(e.target.value)}
+                placeholder="Введите ваш Apify API токен..."
+                className="mt-1"
+              />
+              {apifyApiToken && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Сохранен: {maskApiKey(apifyApiToken)}
+                </p>
+              )}
+              <p className="text-xs text-gray-600 mt-2">
+                Получите API токен на{' '}
+                <a href="https://console.apify.com/account/api" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                  Apify Console
+                </a>
+              </p>
+            </div>
+
             <div>
               <Label htmlFor="twitterApiKey" className="flex items-center gap-2">
                 <Key className="w-4 h-4" />
@@ -146,6 +178,13 @@ const SettingsPanel = ({ onLog }) => {
           <CardTitle>Информация об API</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div>
+            <h4 className="font-medium text-sm">Apify API</h4>
+            <p className="text-xs text-gray-600 mt-1">
+              Используется для извлечения твитов и профилей через сервис Apify Twitter Scraper.
+            </p>
+          </div>
+
           <div>
             <h4 className="font-medium text-sm">Twitter API</h4>
             <p className="text-xs text-gray-600 mt-1">
