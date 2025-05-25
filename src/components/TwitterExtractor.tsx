@@ -13,7 +13,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const TwitterExtractor = ({ onDataExtracted, onLog }) => {
   const [urlsText, setUrlsText] = useState('');
-  const [extractionType, setExtractionType] = useState('tweets');
+  const [extractionType, setExtractionType] = useState('accounts');
   const [tweetCount, setTweetCount] = useState(10);
   const [withReplies, setWithReplies] = useState(false);
   const [extractedData, setExtractedData] = useState(null);
@@ -43,7 +43,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
   };
 
   const startApifyActor = async (inputData, apiToken) => {
-    console.log('Запуск Apify Actor с данными:', inputData);
+    console.log('Запуск Apify Actor с данными:', JSON.stringify(inputData, null, 2));
     
     const response = await fetch('https://api.apify.com/v2/acts/web.harvester~twitter-scraper/runs', {
       method: 'POST',
@@ -165,6 +165,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
 
         if (parsed.type === 'user') {
           if (extractionType === 'accounts') {
+            // Добавляем URL профиля напрямую для извлечения аккаунтов
             startUrls.push(parsed.url);
             handles.push(parsed.username);
           } else {
@@ -172,6 +173,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
           }
         } else if (parsed.type === 'tweet') {
           if (extractionType === 'tweets') {
+            // Для отдельных твитов добавляем URL твита
             startUrls.push(parsed.url);
           } else {
             onLog(`URL твита не подходит для извлечения аккаунтов: ${trimmedUrl}`, 'warning');
@@ -179,7 +181,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
         }
       }
 
-      if (startUrls.length === 0) {
+      if (startUrls.length === 0 && handles.length === 0) {
         toast({
           title: "Ошибка",
           description: "Нет подходящих URL для обработки",
@@ -188,14 +190,22 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
         return;
       }
 
-      // Формируем данные для Apify Actor
+      // Формируем данные для Apify Actor согласно документации
       const inputData = {
-        startUrls: startUrls,
-        handles: handles,
-        tweetsDesired: extractionType === 'accounts' ? tweetCount : 1,
+        tweetsDesired: tweetCount,
         withReplies: withReplies,
         includeUserInfo: true
       };
+
+      // Добавляем startUrls как простые строки (не объекты)
+      if (startUrls.length > 0) {
+        inputData.startUrls = startUrls;
+      }
+
+      // Добавляем handles как простые строки
+      if (handles.length > 0) {
+        inputData.handles = handles;
+      }
 
       onLog(`Подготовка запроса к Apify с параметрами: ${JSON.stringify(inputData, null, 2)}`, 'info');
 
@@ -215,7 +225,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
       
       console.log('Получены результаты:', results);
 
-      // Обрабатываем результаты
+      // Обрабатываем результаты согласно новому формату API
       const processedResults = [];
       
       for (const item of results) {
@@ -243,10 +253,10 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
           } else {
             processedResults.push({
               type: 'user_tweets',
-              originalUrl: item.user?.url || `https://x.com/${item.user?.username}`,
-              profileUrl: item.user?.url || `https://x.com/${item.user?.username}`,
+              originalUrl: item.user?.url || `https://x.com/${item.user?.username || item.username}`,
+              profileUrl: item.user?.url || `https://x.com/${item.user?.username || item.username}`,
               userProfile: {
-                userId: item.user?.userId,
+                userId: item.user?.userId || item.tweetUserId,
                 username: item.user?.username || item.username,
                 name: item.user?.userFullName || item.fullname,
                 description: item.user?.description || '',
@@ -302,7 +312,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
               media: item.media || []
             },
             authorProfile: item.user ? {
-              userId: item.user.userId,
+              userId: item.user.userId || item.tweetUserId,
               username: item.user.username || item.username,
               name: item.user.userFullName || item.fullname,
               description: item.user.description || '',
@@ -391,7 +401,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
           <Alert>
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              <strong>Новый сервис:</strong> Теперь используется Apify Twitter Scraper. 
+              <strong>Обновленный сервис:</strong> Используется Apify Twitter Profile & Tweets Scraper. 
               Убедитесь, что у вас есть действительный Apify API токен в настройках.
               Процесс извлечения может занять несколько минут.
             </AlertDescription>
@@ -435,35 +445,31 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
             />
           </div>
 
-          {extractionType === 'accounts' && (
-            <>
-              <div>
-                <Label htmlFor="tweetCount">Количество твитов с каждого аккаунта</Label>
-                <Input
-                  id="tweetCount"
-                  type="number"
-                  value={tweetCount}
-                  onChange={(e) => setTweetCount(Math.max(1, Math.min(200, parseInt(e.target.value) || 10)))}
-                  min="1"
-                  max="200"
-                  className="mt-1"
-                />
-              </div>
-              
-              <div className="flex items-center space-x-2">
-                <input
-                  type="checkbox"
-                  id="withReplies"
-                  checked={withReplies}
-                  onChange={(e) => setWithReplies(e.target.checked)}
-                  className="h-4 w-4"
-                />
-                <Label htmlFor="withReplies" className="text-sm">
-                  Включать ответы в треды
-                </Label>
-              </div>
-            </>
-          )}
+          <div>
+            <Label htmlFor="tweetCount">Количество твитов {extractionType === 'accounts' ? 'с каждого аккаунта' : 'для извлечения'}</Label>
+            <Input
+              id="tweetCount"
+              type="number"
+              value={tweetCount}
+              onChange={(e) => setTweetCount(Math.max(1, Math.min(200, parseInt(e.target.value) || 10)))}
+              min="1"
+              max="200"
+              className="mt-1"
+            />
+          </div>
+          
+          <div className="flex items-center space-x-2">
+            <input
+              type="checkbox"
+              id="withReplies"
+              checked={withReplies}
+              onChange={(e) => setWithReplies(e.target.checked)}
+              className="h-4 w-4"
+            />
+            <Label htmlFor="withReplies" className="text-sm">
+              Включать ответы в треды
+            </Label>
+          </div>
 
           <Button 
             onClick={extractData} 
@@ -534,7 +540,7 @@ const TwitterExtractor = ({ onDataExtracted, onLog }) => {
               </Button>
             </div>
           </CardContent>
-        </Card>
+        </CardContent>
       )}
     </div>
   );
